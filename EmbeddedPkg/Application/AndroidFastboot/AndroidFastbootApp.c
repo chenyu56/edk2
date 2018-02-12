@@ -35,6 +35,8 @@
 
 #define FILL_BUF_SIZE               1024
 
+#define RECEIVE_CMD_LEN             512
+
 #define IS_DEVICE_PATH_NODE(node,type,subtype) (((node)->Type == (type)) && ((node)->SubType == (subtype)))
 
 #define ALIGN(x, a)        (((x) + ((a) - 1)) & ~((a) - 1))
@@ -160,15 +162,15 @@ HandleDownload (
     SEND_LITERAL ("FAILNot enough memory");
   } else {
     ZeroMem (Response, sizeof Response);
-    if (mTransport->RequestReceive) {
-      mTransport->RequestReceive (mNumDataBytes);
-    }
     AsciiSPrint (Response, sizeof Response, "DATA%x",
       (UINT32)mNumDataBytes);
     mTransport->Send (sizeof Response - 1, Response, &mFatalSendErrorEvent);
 
     mState = ExpectDataState;
     mBytesReceivedSoFar = 0;
+    if (mTransport->RequestReceive) {
+      mTransport->RequestReceive (mNumDataBytes);
+    }
   }
 }
 
@@ -433,6 +435,10 @@ AcceptCmd (
   } else {
     HandleOemCommand (Command);
   }
+
+  if (mTransport->RequestReceive && mState == ExpectCmdState) {
+    mTransport->RequestReceive (RECEIVE_CMD_LEN);
+  }
 }
 
 STATIC
@@ -477,6 +483,16 @@ AcceptData (
     SEND_LITERAL ("OKAY");
     mState = ExpectCmdState;
   }
+
+  if (mTransport->RequestReceive) {
+    if (mState == ExpectCmdState) {
+      mTransport->RequestReceive (RECEIVE_CMD_LEN);
+    } else if (mState == ExpectDataState) {
+      mTransport->RequestReceive (RemainingBytes - Size);
+    } else {
+      ASSERT (FALSE);
+    }
+  }
 }
 
 /*
@@ -497,12 +513,6 @@ DataReady (
   EFI_STATUS  Status;
 
   do {
-    // Indicate lower layer driver that how much bytes are expected.
-    if (mState == ExpectDataState) {
-      Size = mNumDataBytes;
-    } else {
-      Size = 0;
-    }
     Status = mTransport->Receive (&Size, &Data);
     if (!EFI_ERROR (Status)) {
       if (mState == ExpectCmdState) {
@@ -512,7 +522,6 @@ DataReady (
       } else {
         ASSERT (FALSE);
       }
-      FreePool (Data);
     }
   } while (!EFI_ERROR (Status));
 
